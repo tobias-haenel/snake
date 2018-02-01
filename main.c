@@ -182,7 +182,7 @@ move_snake(struct game_state_t *state) {
     }
 
     // check if the snake consumes the food
-    if (positions_equal(&new_head_pos, &(state->snake->position))) {
+    if (positions_equal(&new_head_pos, &(state->food->position))) {
         // move the snakes head to the new (food) position, keep the tail
         struct snake_body_part_t *new_part = malloc(sizeof(*new_part));
         new_part->position = new_head_pos;
