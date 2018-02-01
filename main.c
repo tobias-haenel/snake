@@ -2,6 +2,8 @@
 #include <stdlib.h>
 #include <assert.h>
 #include <time.h>
+#include <ncurses.h>
+#include <string.h>
 
 struct position_t {
     int x;
@@ -31,8 +33,10 @@ struct game_state_t {
     struct snake_body_part_t *snake;
     struct food_t *food;
     enum direction_t direction;
+    enum direction_t blocked_direction;
     int running;
     int game_won;
+    WINDOW *win;
 };
 
 void
@@ -73,8 +77,13 @@ positions_equal(struct position_t *p1, struct position_t *p2);
 
 void
 read_inputs(struct game_state_t *state) {
-    // see wgetch()
-    (void) state;
+    int key = wgetch(state->win);
+    switch (key)  {
+        case KEY_DOWN : if (state->blocked_direction != DOWN) state->direction = DOWN; break;
+        case KEY_UP : if (state->blocked_direction != UP) state->direction = UP; break;
+        case KEY_LEFT : if (state->blocked_direction != LEFT) state->direction = LEFT; break;
+        case KEY_RIGHT : if (state->blocked_direction != RIGHT) state->direction = RIGHT; break;
+    }
 }
 
 void
@@ -84,29 +93,87 @@ update_state(struct game_state_t *state) {
 
 void
 render_state(struct game_state_t *state) {
-    // see box(), mvwaddch(), wrefresh(), has_colors()
-    // TODO render box around field
-    // TODO render snake
-    // TODO render food
-    // TODO show window content
+    // clear window content
+    werase(state->win);
+
+    // render box around field
+    box(state->win, 0, 0);
+
+    if (state->running) {
+        // render snake
+        struct snake_body_part_t *current = state->snake;
+        mvwaddch(state->win, current->position.y + 1, current->position.x + 1, '0' | COLOR_PAIR(1));
+        current = current->next;
+        while (current) {
+            mvwaddch(state->win, current->position.y + 1, current->position.x + 1, 'O' | COLOR_PAIR(1));
+            current = current->next;
+        }
+
+        // render food
+        mvwaddch(state->win, state->food->position.y + 1, state->food->position.x + 1, 'X' | COLOR_PAIR(2));
+    } else {
+        int rows, cols;
+        getmaxyx(state->win, rows, cols);
+        if (state->game_won) {
+            char msg[] = "You won.";
+            mvwprintw(state->win, rows / 2, (cols - strlen(msg)) / 2, msg);
+        } else {
+            char msg[] = "You lost.";
+            mvwprintw(state->win, rows / 2, (cols - strlen(msg)) / 2, msg);
+        }
+    }
+    // show window content
+    wrefresh(state->win);
+
+    // wait for enter after the game was finished
+    if (!state->running) {
+        nodelay(state->win, 0);
+        nocbreak();
+        wgetch(state->win);
+    }
 }
 
 struct game_state_t *
 init_game_state() {
+    // initialise ncurses
+    initscr();
+    int rows, cols;
+    getmaxyx(stdscr, rows, cols);
+    int fieldHeight = 16;
+    int fieldWidth = 32;
+    int winHeight = fieldHeight + 2;
+    int winWidth = fieldWidth + 2;
+
     struct game_state_t *state = malloc(sizeof(*state));
-    state->fieldWidth = 32;
-    state->fieldHeight = 16;
-    state->snake = init_snake(state->fieldWidth, state->fieldHeight);
+    state->fieldWidth = fieldWidth;
+    state->fieldHeight = fieldHeight;
+    state->snake = init_snake(fieldWidth, fieldHeight);
     state->food = init_food();
     state->direction = LEFT;
+    state->blocked_direction = RIGHT;
     state->running = 1;
     state->game_won = 0;
+    state->win = newwin(winHeight, winWidth, (rows - winHeight) / 2, (cols - winWidth) / 2);
     spawn_food(state);
 
-    // see initscr(), create_newwin(), (no)echo(), keypad(), cbreak(), nodelay(), has_colors(), start_color(), init_pair(), curs_set(), (no)nl(), intrflush()
-    // TODO initialise ncurses
-    // TODO set ncurses options for interactive usage
-    // TODO create a window for the field
+    // set ncurses options for interactive usage
+    cbreak();
+    noecho();
+    nodelay(state->win, 1);
+    keypad(state->win, 1);
+    intrflush(state->win, 1);
+
+    nonl();
+
+    if (has_colors()) {
+        start_color();
+    }
+    init_pair(1, COLOR_GREEN, COLOR_BLACK); // snake
+    init_pair(2, COLOR_RED, COLOR_BLACK); // food
+
+    curs_set(0);
+
+
     return state;
 }
 
@@ -114,11 +181,11 @@ void
 deinit_game_state(struct game_state_t *state) {
     deinit_snake(state->snake);
     deinit_food(state->food);
+    delwin(state->win);
 
-    // delwin(), endwin()
-    // TODO delete the window for the field
-    // TODO deinitialise ncurses
     free(state);
+
+    endwin();
 }
 
 struct snake_body_part_t *
@@ -151,10 +218,10 @@ move_snake(struct game_state_t *state) {
     struct position_t new_head_pos;
     new_head_pos = state->snake->position;
     switch (state->direction) {
-        case LEFT : new_head_pos.x -= 1; break;
-        case UP : new_head_pos.y += 1; break;
-        case RIGHT : new_head_pos.x += 1; break;
-        case DOWN : new_head_pos.y -= 1; break;
+        case LEFT : new_head_pos.x -= 1; state->blocked_direction = RIGHT; break;
+        case UP : new_head_pos.y -= 1; state->blocked_direction = DOWN; break;
+        case RIGHT : new_head_pos.x += 1; state->blocked_direction = LEFT; break;
+        case DOWN : new_head_pos.y += 1; state->blocked_direction = UP; break;
     }
     if (new_head_pos.x >= state->fieldWidth) new_head_pos.x = 0;
     if (new_head_pos.x < 0) new_head_pos.x = state->fieldWidth - 1;
@@ -278,7 +345,7 @@ int main() {
 
     struct game_state_t *state = init_game_state();
 
-    double time_per_update = 1;
+    double time_per_update = 1.0 / 8.0;
     double previous_time = get_time();
     double update_lag = 0;
     while (state->running) {
@@ -295,6 +362,7 @@ int main() {
         render_state(state);
     }
     // deinit
+
     deinit_game_state(state);
     return 0;
 }
